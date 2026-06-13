@@ -1,7 +1,10 @@
 import boto3
+import logging
+import os
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
+from botocore.exceptions import ClientError, NoCredentialsError
 
 
 class ChatMessage(BaseModel):
@@ -15,9 +18,15 @@ class ToolDefinition(BaseModel):
     input_schema: Dict[str, Any]
 
 
+class ToolCall(BaseModel):
+    id: str
+    name: str
+    arguments: Dict[str, Any]
+
+
 class ChatCompletionResponse(BaseModel):
     content: str
-    tool_calls: Optional[List[Dict[str, Any]]] = None
+    tool_calls: Optional[List[ToolCall]] = None
 
 
 class ChatClient(ABC):
@@ -36,9 +45,58 @@ class ChatClient(ABC):
 class BedrockChatClient(ChatClient):
     """AWS Bedrock chat client using Converse API"""
     
-    def __init__(self, region_name: str = "eu-north-1", model_id: str = "eu.anthropic.claude-sonnet-4-5-20250929-v1:0"):
-        self.client = boto3.client("bedrock-runtime", region_name=region_name)
-        self.model_id = model_id
+    def __init__(self, region_name: str = None, model_id: str = None):
+        self.logger = logging.getLogger(__name__)
+        
+        # Use environment variables or defaults
+        self.region_name = region_name or os.getenv("BEDROCK_REGION", os.getenv("AWS_DEFAULT_REGION", "eu-north-1"))
+        self.model_id = model_id or os.getenv("BEDROCK_MODEL_ID", "eu.anthropic.claude-sonnet-4-5-20250929-v1:0")
+        
+        try:
+            # Load .env file if available
+            self._load_env_file()
+            
+            # Check for bearer token (required)
+            bearer_token = os.getenv("AWS_BEARER_TOKEN_BEDROCK")
+            if not bearer_token:
+                raise ValueError("AWS_BEARER_TOKEN_BEDROCK environment variable is required")
+            
+            # Set up AWS session with bearer token
+            os.environ["AWS_SESSION_TOKEN"] = bearer_token
+            os.environ["AWS_ACCESS_KEY_ID"] = "dummy"  # Required by boto3
+            os.environ["AWS_SECRET_ACCESS_KEY"] = "dummy"  # Required by boto3
+            
+            self.client = boto3.client("bedrock-runtime", region_name=self.region_name)
+            self.logger.info(f"Initialized Bedrock client with bearer token in region {self.region_name}")
+            
+        except ValueError as e:
+            self.logger.error(str(e))
+            raise
+        except Exception as e:
+            self.logger.error(f"Failed to initialize Bedrock client: {e}")
+            raise
+    
+    def _load_env_file(self):
+        """Load environment variables from .env file if it exists"""
+        try:
+            import os
+            from pathlib import Path
+            
+            # Look for .env in project root (current working directory)
+            env_file = Path.cwd() / ".env"
+            if env_file.exists():
+                with open(env_file) as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#') and '=' in line:
+                            key, value = line.split('=', 1)
+                            key, value = key.strip(), value.strip()
+                            os.environ.setdefault(key, value)
+                self.logger.debug(f"Loaded .env file from {env_file}")
+            else:
+                self.logger.debug(f".env file not found at {env_file}")
+        except Exception as e:
+            self.logger.debug(f"Error loading .env file: {e}")
     
     def chat_completion(
         self,
@@ -90,6 +148,7 @@ class BedrockChatClient(ChatClient):
             }
         
         try:
+            self.logger.debug(f"Making Bedrock request with {len(messages)} messages")
             response = self.client.converse(**request_params)
             
             # Extract content and tool calls from Converse response
@@ -105,19 +164,27 @@ class BedrockChatClient(ChatClient):
                     content += block["text"]
                 elif "toolUse" in block:
                     tool_use = block["toolUse"]
-                    tool_calls.append({
-                        "id": tool_use["toolUseId"],
-                        "name": tool_use["name"],
-                        "arguments": tool_use["input"]
-                    })
+                    tool_calls.append(ToolCall(
+                        id=tool_use["toolUseId"],
+                        name=tool_use["name"],
+                        arguments=tool_use["input"]
+                    ))
+            
+            self.logger.debug(f"Received response with content length: {len(content)}, tool calls: {len(tool_calls)}")
             
             return ChatCompletionResponse(
                 content=content,
                 tool_calls=tool_calls if tool_calls else None
             )
             
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            error_msg = e.response['Error']['Message']
+            self.logger.error(f"Bedrock API error ({error_code}): {error_msg}")
+            raise Exception(f"Bedrock API error ({error_code}): {error_msg}")
         except Exception as e:
-            raise Exception(f"Bedrock Converse API error: {str(e)}")
+            self.logger.error(f"Unexpected error in Bedrock client: {str(e)}")
+            raise Exception(f"Bedrock client error: {str(e)}")
 
 
 class MockChatClient(ChatClient):

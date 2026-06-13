@@ -14,7 +14,21 @@ pip install -e .
 - **Model**: Claude Sonnet 4.5 (`eu.anthropic.claude-sonnet-4-5-20250929-v1:0`)
 - **Region**: eu-north-1
 - **API**: Bedrock Converse API
-- **Credentials**: AWS credentials required (aws configure or environment variables)
+
+#### Credential Setup
+
+**Method 1: Environment Variable**
+```bash
+export AWS_BEARER_TOKEN_BEDROCK=your_token_here
+python test_client.py
+```
+
+**Method 2: Environment File (Persistent)**
+```bash
+cp .env.example .env
+# Edit .env and add your AWS_BEARER_TOKEN_BEDROCK
+python test_client.py
+```
 
 ### Testing
 - Mock client available for development without AWS credentials
