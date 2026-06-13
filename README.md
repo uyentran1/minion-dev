@@ -23,18 +23,20 @@ From ticket to PR with zero human touch - automates the entire software delivery
 pip install -e .
 ```
 
-2. Configure AWS credentials (optional - mock mode available):
+2. Configure AWS Bedrock credentials (optional - mock mode available):
 ```bash
-aws configure
-# OR set environment variables:
-# export AWS_ACCESS_KEY_ID="your-key"
-# export AWS_SECRET_ACCESS_KEY="your-secret"
-# export AWS_DEFAULT_REGION="us-east-1"
+# Option 1: Bearer Token (Recommended)
+export AWS_BEARER_TOKEN_BEDROCK="your-bearer-token"
+
+# Option 2: Environment File
+cp .env.example .env
+# Add your AWS_BEARER_TOKEN_BEDROCK to .env
 ```
 
 3. Test the setup:
 ```bash
-python test_bedrock.py
+source .venv/bin/activate
+python test_client.py
 ```
 
 4. Run MinionDev:
