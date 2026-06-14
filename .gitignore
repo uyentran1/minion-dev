@@ -46,5 +46,3 @@ Thumbs.db
 
 # MinionDev specific
 .miniondev/
-test_*.py
-*_test.py
