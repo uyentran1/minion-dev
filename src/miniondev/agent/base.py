@@ -7,7 +7,8 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 from enum import Enum
 
-from miniondev.llm.client import ChatClient, ChatMessage, ChatCompletionResponse
+from miniondev.llm.client import ChatClient, ChatMessage, ChatCompletionResponse, ToolCall
+from miniondev.tools import get_registry
 
 
 class AgentState(Enum):
@@ -114,7 +115,11 @@ class Agent(ABC):
         self.state = AgentState.THINKING
         
         try:
-            self.logger.debug(f"Calling LLM with {len(self.messages)} messages")
+            # Use tools from registry if none provided
+            if tools is None:
+                tools = get_registry().get_tool_definitions()
+            
+            self.logger.debug(f"Calling LLM with {len(self.messages)} messages and {len(tools) if tools else 0} tools")
             response = self.llm_client.chat_completion(
                 messages=self.messages,
                 tools=tools,
@@ -124,6 +129,12 @@ class Agent(ABC):
             # Add assistant response to conversation
             if response.content:
                 self.add_message("assistant", response.content)
+            
+            # Add tool calls to conversation as assistant messages
+            if response.tool_calls:
+                for tool_call in response.tool_calls:
+                    tool_call_msg = f"[Tool call: {tool_call.name} with args {tool_call.arguments}]"
+                    self.add_message("assistant", tool_call_msg)
             
             self.state = AgentState.ACTING if response.tool_calls else AgentState.IDLE
             return response
@@ -164,7 +175,7 @@ class Agent(ABC):
                         result = self._execute_tool_call(tool_call)
                         self.add_message("user", f"Tool {tool_call.name} result: {result}")
                 
-                # Check if agent has completed its task
+                # Check if agent has completed its task (no tool calls and has content)
                 if self._is_task_complete(response):
                     self.state = AgentState.COMPLETED
                     break
@@ -194,10 +205,22 @@ class Agent(ABC):
         """Build the initial user prompt based on input data - override in subclasses"""
         return f"Please process this input: {input_data}"
     
-    def _execute_tool_call(self, tool_call) -> str:
-        """Execute a tool call - override in subclasses to implement tools"""
-        self.logger.warning(f"Tool call {tool_call.name} not implemented")
-        return f"Tool {tool_call.name} not implemented"
+    def _execute_tool_call(self, tool_call: ToolCall) -> str:
+        """Execute a tool call using the tool registry"""
+        try:
+            registry = get_registry()
+            result = registry.execute_tool(tool_call.name, tool_call.arguments)
+            
+            if result.success:
+                self.logger.debug(f"Tool {tool_call.name} executed successfully")
+                return str(result.output)
+            else:
+                self.logger.error(f"Tool {tool_call.name} failed: {result.error}")
+                return f"Tool execution failed: {result.error}"
+                
+        except Exception as e:
+            self.logger.error(f"Tool execution error: {e}")
+            return f"Tool execution error: {str(e)}"
     
     def _is_task_complete(self, response: ChatCompletionResponse) -> bool:
         """Check if the agent's task is complete - override in subclasses"""
