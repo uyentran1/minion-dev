@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 from enum import Enum
 
-from miniondev.llm.client import ChatClient, ChatMessage, ChatCompletionResponse, ToolCall
+from miniondev.llm.client import ChatClient, ChatMessage, ChatCompletionResponse, ToolCall, ToolResult
 from miniondev.tools import get_registry
 
 
@@ -99,9 +99,17 @@ class Agent(ABC):
             
         self.logger.info(f"Initialized conversation for {self.agent_type} agent")
     
-    def add_message(self, role: str, content: str):
+    def add_message(
+        self,
+        role: str,
+        content: str = "",
+        tool_calls: Optional[List[ToolCall]] = None,
+        tool_results: Optional[List[ToolResult]] = None,
+    ):
         """Add a message to the conversation with automatic length management"""
-        self.messages.append(ChatMessage(role=role, content=content))
+        self.messages.append(
+            ChatMessage(role=role, content=content, tool_calls=tool_calls, tool_results=tool_results)
+        )
         self.logger.debug(f"Added {role} message: {content[:100]}...")
         
         # Trim conversation if it gets too long (keep system message + recent messages)
@@ -131,15 +139,13 @@ class Agent(ABC):
                 max_tokens=max_tokens
             )
             
-            # Add assistant response to conversation
-            if response.content:
-                self.add_message("assistant", response.content)
-            
-            # Add tool calls to conversation as assistant messages
-            if response.tool_calls:
-                for tool_call in response.tool_calls:
-                    tool_call_msg = f"[Tool call: {tool_call.name} with args {tool_call.arguments}]"
-                    self.add_message("assistant", tool_call_msg)
+            # Add assistant response (text and/or tool calls) as a single structured
+            # message - Bedrock Converse requires one message per turn, with any
+            # toolUse blocks alongside text in the same content list.
+            if response.content or response.tool_calls:
+                self.add_message(
+                    "assistant", response.content or "", tool_calls=response.tool_calls
+                )
             
             self.state = AgentState.ACTING if response.tool_calls else AgentState.IDLE
             return response
@@ -174,11 +180,17 @@ class Agent(ABC):
                 # Get LLM response
                 response = self.call_llm(tools=self.get_available_tools())
                 
-                # Handle tool calls if present
+                # Handle tool calls if present - all results for this turn go into a
+                # single user message, one toolResult block per toolUseId, matching
+                # how Converse expects multi-tool-use turns to be answered.
                 if response.tool_calls:
+                    tool_results = []
                     for tool_call in response.tool_calls:
-                        result = self._execute_tool_call(tool_call)
-                        self.add_message("user", f"Tool {tool_call.name} result: {result}")
+                        content, is_error = self._execute_tool_call(tool_call)
+                        tool_results.append(
+                            ToolResult(tool_use_id=tool_call.id, content=content, is_error=is_error)
+                        )
+                    self.add_message("user", tool_results=tool_results)
                 
                 # Check if agent has completed its task (no tool calls and has content)
                 if self._is_task_complete(response):
@@ -210,22 +222,22 @@ class Agent(ABC):
         """Build the initial user prompt based on input data - override in subclasses"""
         return f"Please process this input: {input_data}"
     
-    def _execute_tool_call(self, tool_call: ToolCall) -> str:
-        """Execute a tool call using the tool registry"""
+    def _execute_tool_call(self, tool_call: ToolCall) -> tuple[str, bool]:
+        """Execute a tool call using the tool registry. Returns (content, is_error)."""
         try:
             registry = get_registry()
             result = registry.execute_tool(tool_call.name, tool_call.arguments)
-            
+
             if result.success:
                 self.logger.debug(f"Tool {tool_call.name} executed successfully")
-                return str(result.output)
+                return str(result.output), False
             else:
                 self.logger.error(f"Tool {tool_call.name} failed: {result.error}")
-                return f"Tool execution failed: {result.error}"
-                
+                return f"Tool execution failed: {result.error}", True
+
         except Exception as e:
             self.logger.error(f"Tool execution error: {e}")
-            return f"Tool execution error: {str(e)}"
+            return f"Tool execution error: {str(e)}", True
     
     def _is_task_complete(self, response: ChatCompletionResponse) -> bool:
         """Check if the agent's task is complete - override in subclasses"""

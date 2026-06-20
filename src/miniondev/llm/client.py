@@ -7,11 +7,6 @@ from pydantic import BaseModel
 from botocore.exceptions import ClientError, NoCredentialsError
 
 
-class ChatMessage(BaseModel):
-    role: str  # "user", "assistant", "system"
-    content: str
-
-
 class ToolDefinition(BaseModel):
     name: str
     description: str
@@ -22,6 +17,22 @@ class ToolCall(BaseModel):
     id: str
     name: str
     arguments: Dict[str, Any]
+
+
+class ToolResult(BaseModel):
+    tool_use_id: str
+    content: str
+    is_error: bool = False
+
+
+class ChatMessage(BaseModel):
+    role: str  # "user", "assistant", "system"
+    content: str = ""
+    # Structured Converse content blocks. An assistant message may carry tool_calls
+    # (the toolUse blocks it issued); a user message may carry tool_results (the
+    # toolResult blocks answering them, correlated by tool_use_id/toolUseId).
+    tool_calls: Optional[List[ToolCall]] = None
+    tool_results: Optional[List[ToolResult]] = None
 
 
 class ChatCompletionResponse(BaseModel):
@@ -113,11 +124,36 @@ class BedrockChatClient(ChatClient):
         for msg in messages:
             if msg.role == "system":
                 system_message = msg.content
-            else:
-                conversation.append({
-                    "role": msg.role,
-                    "content": [{"text": msg.content}]
-                })
+                continue
+
+            content_blocks = []
+            if msg.content:
+                content_blocks.append({"text": msg.content})
+
+            if msg.tool_calls:
+                for tool_call in msg.tool_calls:
+                    content_blocks.append({
+                        "toolUse": {
+                            "toolUseId": tool_call.id,
+                            "name": tool_call.name,
+                            "input": tool_call.arguments,
+                        }
+                    })
+
+            if msg.tool_results:
+                for tool_result in msg.tool_results:
+                    content_blocks.append({
+                        "toolResult": {
+                            "toolUseId": tool_result.tool_use_id,
+                            "content": [{"text": tool_result.content}],
+                            "status": "error" if tool_result.is_error else "success",
+                        }
+                    })
+
+            conversation.append({
+                "role": msg.role,
+                "content": content_blocks
+            })
         
         # Build request parameters
         request_params = {

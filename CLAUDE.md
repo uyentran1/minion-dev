@@ -89,3 +89,22 @@ pip install boto3 pydantic
 - Uses system inference profiles for EU region
 - Mock client enables development without AWS costs
 - Pydantic for data validation and type safety
+
+## Known Issues / Technical Debt
+
+### ~~Tool call history is flattened to plain text~~ (fixed)
+
+Previously, `Agent.call_llm()` recorded tool calls in conversation history as plain text
+strings (`"[Tool call: {name} with args {args}]"`) instead of as Bedrock Converse's
+structured `toolUse`/`toolResult` content blocks, which once caused the model to imitate
+that bracket-text convention as plain output instead of issuing a real tool call.
+
+**Fixed**: `ChatMessage` (`src/miniondev/llm/client.py`) now carries structured `tool_calls`
+and `tool_results` fields. `call_llm()` builds one assistant message per turn with text and
+all `toolUse` blocks together; `run_conversation_loop()` batches all tool results for a turn
+into a single user message with one `toolResult` block per `toolUseId`, correlated via
+`ToolResult.tool_use_id`/`toolUseId`. `BedrockChatClient.chat_completion()` serializes these
+into real Converse content blocks instead of flattening to text. `ToolResult.is_error` is set
+from actual tool success/failure (not always `False`), so the model gets a structured
+success/failure signal, not just prose. Verified via the full test suite including Bedrock
+integration tests for SimpleAgent, PlannerAgent, and ExecutorAgent.

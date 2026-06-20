@@ -50,23 +50,25 @@ class TestExecutorToolTracking:
         agent = ExecutorAgent(MockChatClient())
         file_path = os.path.join(temp_dir, "calculator.py")
 
-        result = agent._execute_tool_call(ToolCall(
+        content, is_error = agent._execute_tool_call(ToolCall(
             id="1",
             name="write_file",
             arguments={"file_path": file_path, "content": "def multiply(a, b): return a * b"},
         ))
 
-        assert "Successfully wrote" in result
+        assert "Successfully wrote" in content
+        assert not is_error
         assert file_path in agent._modified_files
 
     def test_failed_tool_call_is_recorded_as_error(self):
         agent = ExecutorAgent(MockChatClient())
 
-        result = agent._execute_tool_call(ToolCall(
+        content, is_error = agent._execute_tool_call(ToolCall(
             id="1", name="read_file", arguments={"file_path": "/nonexistent/path.txt"}
         ))
 
-        assert "Tool execution failed" in result
+        assert "Tool execution failed" in content
+        assert is_error
         assert agent._tool_errors
         assert "read_file" in agent._tool_errors[0]
 

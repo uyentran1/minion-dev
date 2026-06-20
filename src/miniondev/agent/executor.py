@@ -65,13 +65,13 @@ class ExecutorAgent(Agent):
             f"Acceptance criteria:\n{criteria_text}"
         )
 
-    def _execute_tool_call(self, tool_call: ToolCall) -> str:
+    def _execute_tool_call(self, tool_call: ToolCall) -> tuple[str, bool]:
         registry = get_registry()
         result = registry.execute_tool(tool_call.name, tool_call.arguments)
 
         if not result.success:
             self._tool_errors.append(f"{tool_call.name}: {result.error}")
-            return f"Tool execution failed: {result.error}"
+            return f"Tool execution failed: {result.error}", True
 
         path_arg = WRITE_TOOL_PATH_ARGS.get(tool_call.name)
         if path_arg:
@@ -79,7 +79,7 @@ class ExecutorAgent(Agent):
             if path and path not in self._modified_files:
                 self._modified_files.append(path)
 
-        return str(result.output)
+        return str(result.output), False
 
     def _extract_final_result(self) -> AgentResult:
         if not self.messages or self.messages[-1].role != "assistant":
