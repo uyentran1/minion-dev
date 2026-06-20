@@ -66,16 +66,21 @@ class Agent(ABC):
         self.messages: List[ChatMessage] = []
         self.context: Optional[AgentContext] = None
         self.max_conversation_length = 50  # Prevent memory issues in long conversations
+        self.max_turns = 10  # Prevent infinite loops; override in subclasses that need more exploration
         
     @abstractmethod
     def get_system_prompt(self) -> str:
         """Return the system prompt that defines this agent's role and capabilities"""
         pass
     
-    @abstractmethod 
+    @abstractmethod
     def execute(self, context: AgentContext, input_data: Dict[str, Any]) -> AgentResult:
         """Execute the agent's main task with given context and input"""
         pass
+
+    def get_available_tools(self) -> Optional[List]:
+        """Return the tool definitions this agent may use. Override to restrict; None means all registered tools."""
+        return None
     
     def initialize_conversation(self, context: AgentContext, initial_message: str = None):
         """Initialize a new conversation with system prompt and optional initial message"""
@@ -159,15 +164,15 @@ class Agent(ABC):
             self.initialize_conversation(context, initial_prompt)
             
             # Main conversation loop
-            max_turns = 10  # Prevent infinite loops
+            max_turns = self.max_turns
             turn_count = 0
-            
+
             while turn_count < max_turns and self.state not in [AgentState.COMPLETED, AgentState.FAILED]:
                 turn_count += 1
                 self.logger.debug(f"Conversation turn {turn_count}")
                 
                 # Get LLM response
-                response = self.call_llm()
+                response = self.call_llm(tools=self.get_available_tools())
                 
                 # Handle tool calls if present
                 if response.tool_calls:

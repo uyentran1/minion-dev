@@ -189,7 +189,15 @@ class BedrockChatClient(ChatClient):
 
 class MockChatClient(ChatClient):
     """Mock client for testing without API calls"""
-    
+
+    def __init__(
+        self,
+        content: str = "This is a mock response for testing.",
+        tool_calls: Optional[List[ToolCall]] = None
+    ):
+        self.content = content
+        self.tool_calls = tool_calls
+
     def chat_completion(
         self,
         messages: List[ChatMessage],
@@ -197,5 +205,6 @@ class MockChatClient(ChatClient):
         max_tokens: int = 4000
     ) -> ChatCompletionResponse:
         return ChatCompletionResponse(
-            content="This is a mock response for testing."
+            content=self.content,
+            tool_calls=self.tool_calls
         )
