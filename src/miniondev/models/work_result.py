@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from miniondev.models.plan import PlanArtifact
 from miniondev.models.execution import ExecutionResult
+from miniondev.models.finalization import FinalizationResult
 
 
 class WorkResult(BaseModel):
@@ -14,4 +15,5 @@ class WorkResult(BaseModel):
     message: str
     plan: Optional[PlanArtifact] = None
     execution_result: Optional[ExecutionResult] = None
+    finalization_result: Optional[FinalizationResult] = None
     errors: List[str] = Field(default_factory=list)

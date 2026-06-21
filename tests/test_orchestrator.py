@@ -3,7 +3,7 @@ Test the Orchestrator
 """
 from miniondev.agent import AgentResult, ExecutorAgent, PlannerAgent
 from miniondev.llm.client import MockChatClient
-from miniondev.models import WorkItem, WorkResult
+from miniondev.models import FinalizationResult, WorkItem, WorkResult
 from miniondev.orchestrator import Orchestrator
 
 VALID_PLAN_JSON = """{
@@ -71,3 +71,51 @@ class TestOrchestratorFailurePropagation:
         assert result.plan is not None  # Planner's output is preserved even though execution failed
         assert result.execution_result is None
         assert "boom" in result.errors
+
+
+class TestOrchestratorWithFinalizer:
+    def test_finalizer_runs_after_successful_execution(self):
+        planner = PlannerAgent(MockChatClient(content=VALID_PLAN_JSON))
+        executor = ExecutorAgent(MockChatClient(content="Implemented multiply()."))
+        stub_finalization = FinalizationResult(
+            work_item_id="WI-1",
+            dry_run=True,
+            branch_name="minion/wi-1-add-multiply",
+            message="Dry run: no git changes made.",
+        )
+        finalizer = _FakeAgent(AgentResult(
+            success=True,
+            message=stub_finalization.message,
+            data={"finalization_result": stub_finalization},
+        ))
+        orchestrator = Orchestrator(planner=planner, executor=executor, finalizer=finalizer)
+
+        result = orchestrator.process_work_item(make_work_item())
+
+        assert finalizer.called
+        assert result.success
+        assert result.finalization_result == stub_finalization
+        assert result.message == "Dry run: no git changes made."
+
+    def test_no_finalizer_means_no_finalization_phase(self):
+        planner = PlannerAgent(MockChatClient(content=VALID_PLAN_JSON))
+        executor = ExecutorAgent(MockChatClient(content="Implemented multiply()."))
+        orchestrator = Orchestrator(planner=planner, executor=executor)  # finalizer omitted
+
+        result = orchestrator.process_work_item(make_work_item())
+
+        assert result.success
+        assert result.finalization_result is None
+
+    def test_finalizer_failure_still_preserves_plan_and_execution_result(self):
+        planner = PlannerAgent(MockChatClient(content=VALID_PLAN_JSON))
+        executor = ExecutorAgent(MockChatClient(content="Implemented multiply()."))
+        finalizer = _FakeAgent(AgentResult(success=False, message="git push failed", errors=["network error"]))
+        orchestrator = Orchestrator(planner=planner, executor=executor, finalizer=finalizer)
+
+        result = orchestrator.process_work_item(make_work_item())
+
+        assert not result.success
+        assert result.plan is not None
+        assert result.execution_result is not None
+        assert "network error" in result.errors
