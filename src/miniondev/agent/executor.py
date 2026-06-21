@@ -37,7 +37,7 @@ class ExecutorAgent(Agent):
 
     def __init__(self, llm_client: ChatClient):
         super().__init__(llm_client, AgentType.EXECUTOR)
-        self.max_turns = 25  # Implementing multiple steps needs more turns than planning
+        self.max_turns = 40  # Implementing multiple steps needs more turns than planning
         self._modified_files = []
         self._tool_errors = []
 

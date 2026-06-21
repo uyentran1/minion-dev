@@ -50,7 +50,7 @@ class PlannerAgent(Agent):
 
     def __init__(self, llm_client: ChatClient):
         super().__init__(llm_client, AgentType.PLANNER)
-        self.max_turns = 15  # Headroom for repo exploration before producing the final plan
+        self.max_turns = 20  # Headroom for repo exploration before producing the final plan
 
     def get_system_prompt(self) -> str:
         return PLANNER_SYSTEM_PROMPT
