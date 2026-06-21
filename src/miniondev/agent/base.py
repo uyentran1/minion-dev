@@ -4,11 +4,18 @@ Core agent foundation - the base classes and message loop system
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
+from typing import Callable, List, Dict, Any, Optional
 from enum import Enum
 
 from miniondev.llm.client import ChatClient, ChatMessage, ChatCompletionResponse, ToolCall, ToolResult
 from miniondev.tools import get_registry
+
+
+def _format_tool_args(arguments: Dict[str, Any], max_len: int = 60) -> str:
+    """Render tool call arguments compactly for progress output (e.g. file content
+    truncated rather than dumped in full)."""
+    text = ", ".join(f"{k}={v!r}" for k, v in arguments.items())
+    return text if len(text) <= max_len else text[:max_len] + "..."
 
 
 class AgentState(Enum):
@@ -67,6 +74,9 @@ class Agent(ABC):
         self.context: Optional[AgentContext] = None
         self.max_conversation_length = 50  # Prevent memory issues in long conversations
         self.max_turns = 10  # Prevent infinite loops; override in subclasses that need more exploration
+        # Optional hook for surfacing progress (e.g. to a CLI). Kept decoupled from core
+        # logic so agents stay silent in tests and callers choose how to present updates.
+        self.progress_callback: Optional[Callable[[str], None]] = None
         
     @abstractmethod
     def get_system_prompt(self) -> str:
@@ -176,30 +186,41 @@ class Agent(ABC):
             while turn_count < max_turns and self.state not in [AgentState.COMPLETED, AgentState.FAILED]:
                 turn_count += 1
                 self.logger.debug(f"Conversation turn {turn_count}")
-                
+                self._report_progress(f"turn {turn_count}/{max_turns}: thinking...")
+
                 # Get LLM response
                 response = self.call_llm(tools=self.get_available_tools())
-                
+
                 # Handle tool calls if present - all results for this turn go into a
                 # single user message, one toolResult block per toolUseId, matching
                 # how Converse expects multi-tool-use turns to be answered.
                 if response.tool_calls:
                     tool_results = []
                     for tool_call in response.tool_calls:
+                        self._report_progress(
+                            f"turn {turn_count}/{max_turns}: calling {tool_call.name}"
+                            f"({_format_tool_args(tool_call.arguments)})"
+                        )
                         content, is_error = self._execute_tool_call(tool_call)
+                        self._report_progress(
+                            f"turn {turn_count}/{max_turns}: {tool_call.name} -> "
+                            f"{'failed' if is_error else 'ok'}"
+                        )
                         tool_results.append(
                             ToolResult(tool_use_id=tool_call.id, content=content, is_error=is_error)
                         )
                     self.add_message("user", tool_results=tool_results)
-                
+
                 # Check if agent has completed its task (no tool calls and has content)
                 if self._is_task_complete(response):
                     self.state = AgentState.COMPLETED
+                    self._report_progress(f"done in {turn_count} turn(s)")
                     break
-            
+
             if turn_count >= max_turns:
                 self.logger.warning(f"Agent reached max turns ({max_turns})")
                 self.state = AgentState.FAILED
+                self._report_progress(f"failed - reached max turns ({max_turns})")
                 return AgentResult(
                     success=False,
                     message=f"Agent reached maximum conversation turns ({max_turns})",
@@ -221,6 +242,12 @@ class Agent(ABC):
     def _build_initial_prompt(self, input_data: Dict[str, Any]) -> str:
         """Build the initial user prompt based on input data - override in subclasses"""
         return f"Please process this input: {input_data}"
+
+    def _report_progress(self, message: str) -> None:
+        """Emit a progress message via progress_callback, if one is set. No-op by
+        default so core agent logic stays decoupled from how progress is presented."""
+        if self.progress_callback:
+            self.progress_callback(f"[{self.agent_type.value}] {message}")
     
     def _execute_tool_call(self, tool_call: ToolCall) -> tuple[str, bool]:
         """Execute a tool call using the tool registry. Returns (content, is_error)."""

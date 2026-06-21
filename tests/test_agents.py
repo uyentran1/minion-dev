@@ -104,17 +104,58 @@ class TestAgentStates:
 
 class TestAgentWithTools:
     """Test agent integration with tools"""
-    
+
     def test_agent_gets_tools(self, mock_llm_client, test_context):
         """Test that agent gets tool definitions"""
         agent = SimpleAgent(mock_llm_client, "Use tools when helpful")
         agent.initialize_conversation(test_context, "List files")
-        
+
         # Should not fail and should have access to tools
         response = agent.call_llm()
-        
+
         assert response.content is not None
         # Mock client doesn't make tool calls, but tools are available
+
+
+class TestAgentProgressCallback:
+    """Test the progress reporting hook used to surface progress (e.g. to a CLI)"""
+
+    def test_no_callback_is_a_silent_no_op(self, mock_llm_client, test_context):
+        """Default behavior - agents stay silent unless a callback is explicitly set"""
+        agent = SimpleAgent(mock_llm_client)
+        assert agent.progress_callback is None
+
+        result = agent.execute(test_context, {"question": "hi"})  # must not raise
+        assert result.success
+
+    def test_callback_receives_turn_and_completion_messages(self, mock_llm_client, test_context):
+        messages = []
+        agent = SimpleAgent(mock_llm_client)
+        agent.progress_callback = messages.append
+
+        agent.execute(test_context, {"question": "hi"})
+
+        assert any("turn 1/" in m for m in messages)
+        assert any("done in" in m for m in messages)
+        assert all(m.startswith("[simple]") for m in messages)
+
+    def test_callback_receives_tool_call_messages(self, test_context):
+        from miniondev.llm.client import MockChatClient, ToolCall
+
+        # First call returns a tool call, second call (no more tool_calls) completes the loop
+        client = MockChatClient(
+            content="checking the file",
+            tool_calls=[ToolCall(id="1", name="file_exists", arguments={"path": "x.py"})],
+        )
+        agent = SimpleAgent(client)
+        agent.max_turns = 1  # MockChatClient always returns the same tool call, so cap at 1 turn
+        messages = []
+        agent.progress_callback = messages.append
+
+        agent.execute(test_context, {"question": "hi"})
+
+        assert any("calling file_exists" in m for m in messages)
+        assert any("file_exists -> ok" in m for m in messages)
 
 
 @pytest.mark.integration 
